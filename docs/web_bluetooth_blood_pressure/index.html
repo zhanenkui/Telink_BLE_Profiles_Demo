@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="bluez-web-bluetooth" content="width=device-width, initial-scale=1.0">
+        <title>Document</title>
+        <script src="telink-blood-pressure.js"></script>
+
+    </head>
+    <style>
+      html { margin: 0; padding: 0; border: 0; }
+      body { font-family: 'Raleway', sans-serif; color: #d7ecfb; background-color: #072b44; text-align: center; }
+      textarea{color:greenyellow; background-color:black;}
+    </style>
+    <body>
+      <div id="main" style="width: 1450px;float: left">
+        <h3>Web Bluetooth blood pressure Measurement</h3><hr>
+        <div id="showlog" style="width: 700px;float: left;">
+          <button style="float: left;" onclick="clearLoginfo()">clear log</button>
+          <button id="btn-connect" onclick="clickConnect()">scan bluetooth</button>
+          <button id="btn-disconnet" onclick="deviceDisconnect()">Disconnect</button><br><br>
+          <textarea id="log" cols="90" rows="25" readonly="readonly"></textarea>
+        </div>
+        <div id="drop" style="width: 700px;float: right;">
+          <div id="statusText">Blood Pressure Measurement Compound Value</div><br><br>
+          <p id="blood_pre_s" style="float: left">Systolic:</p><br><br><br><br>
+          <p id="blood_pre_d" style="float: left">Diastolic:</p><br><br><br><br>
+          <p id="blood_pre_m" style="float: left">Mean Arterial Pressure:</p><br><br><br><br>
+          <p id="pulse_rate" style="float: left">Pulse Rate value:</p>
+        </div>
+      </div>
+
+    </body>
+</html>
+
+<script>
+
+    var blockCount,firmwareArray = "";            //ota-file
+    var startTime,sendcmd;                        //sendcmd and time
+    var last4byte,OTAversion=0,actionOTA_03ff=0;  //version check and authentication
+    var ServiceMain,nitifiyCharTemp;              //2b12notify
+    var OTApause=1,OTApuasecount=0;               //OTA-puase,count
+    var heartRates = [];
+    var mode = 'bar';
+
+    var canvas = document.querySelector('canvas');
+    var statusText = document.querySelector('#statusText');
+    var fanlight = new Fanlight();
+
+    /**
+     * @clickConnect
+     * Scan and connect to nearby Bluetooth devices
+    */
+    function clickConnect(){
+      fanlight.request().then(connt => {
+        addLoginfo("Bluetooth connection successful");
+      })
+      .catch(error => {
+        addLoginfo('Argh! ' + error);
+      });
+    }
+
+
+    function read_heart_rate(){
+      nitifiyCharTemp.readValue().then(result => {
+        addLoginfo("yi xi shi read value");
+        addLoginfo(result);
+        addLoginfo(result.getUint8(0));
+      });
+    }
+  /**
+   * @otaCharSend
+   * Send data by characteristic
+   */
+  var otaCharSend = function(data) {
+    return new Promise(function(resolve, reject) {
+        console.log("OTA: " + data);
+        fanlight.Txchartic.writeValueWithoutResponse(hexToBytes(data)).then(function(character) {
+            resolve("ok");
+        }).catch(function(err) {
+            reject("some error while sending char data");
+        });
+    });
+  }
+
+ 
+  /**
+   * @bytesToHex
+   * Convert ByteArray to hex
+   */
+  function bytesToHex(data) {
+    return new Uint8Array(data).reduce(function(memo, i) {
+        return memo + ("0" + i.toString(16)).slice(-2);
+    }, "");
+  }
+
+  /**
+   * @hexToBytes
+   * Convert hex to ByteArray
+   */
+  function hexToBytes(hex) {
+    for (var bytes = [], c = 0; c < hex.length; c += 2)
+        bytes.push(parseInt(hex.substr(c, 2), 16));
+    return new Uint8Array(bytes);
+  }
+
+  /**
+   * @addLoginfo
+   * Displays the interaction information in the log box on the web page
+   */
+  function addLoginfo(logTXT) {
+    var time = new Date().toLocaleTimeString("de-DE");
+    var logString = time + ": > " + logTXT;
+    document.getElementById("log").innerHTML += logString + "\n";
+  }
+
+  /**
+   * @clearLoginfo
+   * Clear the information in the log box
+   */
+  function clearLoginfo() {
+    document.getElementById("log").value= "";
+  }
+
+  /**
+   * @Failed_info
+   * Display exception information
+   */
+  function Failed_info(err) {
+    addLoginfo("Update error: " + err);
+    setStatus("Update error: " + err);
+  }
+
+  /**
+   * @deviceDisconnect
+   * device disconnect
+   */
+  function deviceDisconnect() {
+    fanlight.disconnect();
+  }
+
+  /**
+   * @OTA_Authorization
+   * Process feedback after a command is sent
+   */
+  function Data_info_manage(gattServer) {
+    heartRates = [];
+    gattServer.getPrimaryService("00001810-0000-1000-8000-00805f9b34fb")
+      .then(service => {
+        addLoginfo("found blood pressure service");
+        console.log(service);
+        ServiceMain = service;
+        return ServiceMain.getCharacteristic("00002a35-0000-1000-8000-00805f9b34fb");
+      })
+      .then(characteristic => {
+        addLoginfo('Found blood pressure characteristic');
+        console.log(characteristic);
+        console.log(characteristic.properties);
+        nitifiyCharTemp = characteristic; 
+        return nitifiyCharTemp.startNotifications();
+      })
+      .then(() => {
+        nitifiyCharTemp.addEventListener('characteristicvaluechanged', event => {
+            var souvalue = event.target.value;
+            console.log(souvalue);
+            var ntvalue = bytesToHex(souvalue.buffer);
+            addLoginfo("notify-value: " + ntvalue);
+            author_log();
+
+            var bp_value1 = ntvalue.slice(2,6);
+            var bp_value_T1 = parseInt(bp_value1,16);
+            //addLoginfo("get value:" + therm_T);
+            document.getElementById("blood_pre_s").innerHTML = "Systolic value -->: " + bp_value_T1/2 + " (mmHg/kpa)";
+
+            var bp_value2 = ntvalue.slice(6,10);
+            var bp_value_T2 = parseInt(bp_value2,16);
+            //addLoginfo("get value:" + therm_T);
+            document.getElementById("blood_pre_d").innerHTML = "Diastolic value -->: " + bp_value_T2/8 + " (mmHg/kpa)";
+
+            var bp_value3 = ntvalue.slice(10,14);
+            var bp_value_T3 = parseInt(bp_value3,16);
+            //addLoginfo("get value:" + therm_T);
+            document.getElementById("blood_pre_m").innerHTML = "Mean Arterial Pressure value -->: " + bp_value_T3/8 + " (mmHg/kpa)";
+
+            var pulse_rate = ntvalue.slice(28,34);
+            var pulse_rate_value = parseInt(pulse_rate,16);
+            //addLoginfo("get value:" + therm_T);
+            document.getElementById("pulse_rate").innerHTML = "pulse rate value -->: " + pulse_rate_value/10000;
+
+        }).catch(error => console.log(error));
+      });
+  }
+
+  function author_log(){
+    var obj = document.getElementById("log");
+    obj.scrollTop = obj.scrollHeight;
+  }
+</script>
